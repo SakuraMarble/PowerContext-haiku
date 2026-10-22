@@ -68,6 +68,12 @@ from powercontext.builtin.persistence.errors import GenerationConflictError, Rep
 from powercontext.builtin.persistence.memory_windows import MemorySourceWindowRepository
 from powercontext.builtin.persistence.sources import SourceRepository
 from powercontext.builtin.persistence.tables import ARTIFACT_HEADS_TABLE, SOURCE_JOURNAL_HEADS_TABLE
+from powercontext.builtin.processing_diagnostics import (
+    ProcessingDiagnostics,
+    ProcessingFailureReason,
+    ProcessingStage,
+    attach_diagnostics,
+)
 from powercontext.builtin.runtime.atomic_memory import AtomicMemoryApplication, deferred_decision_audit
 from powercontext.builtin.runtime.decision_policy import emit_decision_observation
 from powercontext.builtin.runtime.models import MemoryFlushResult
@@ -638,7 +644,7 @@ class AtomicMemorySourceWindowProcessor:
     def _stage(self, name, attributes):
         return nullcontext(None) if self.tracing is None else self.tracing.stage(name, attributes=attributes)
 
-    def _fits(self, pipeline, value, key):
+    def _estimate(self, pipeline, value, key):
         prompt = current_prompt(key)
         instructions = (
             (
@@ -649,15 +655,30 @@ class AtomicMemorySourceWindowProcessor:
             if prompt is None
             else prompt.compiled_instructions
         )
-        return (
-            pipeline.estimator.estimate(f"{instructions}\n{value.model_dump_json()}") <= self.config.input_tokens_limit
-        )
+        return pipeline.estimator.estimate(f"{instructions}\n{value.model_dump_json()}")
+
+    def _fits(self, pipeline, value, key):
+        return self._estimate(pipeline, value, key) <= self.config.input_tokens_limit
 
     def _require_budget(self, pipeline, value, key):
-        if not self._fits(pipeline, value, key):
-            raise InvalidInferenceOutputError(
-                "atomic-memory-input-budget", "A complete comparison input exceeds its token budget"
-            )
+        estimated = self._estimate(pipeline, value, key)
+        if estimated <= self.config.input_tokens_limit:
+            return
+        error = InvalidInferenceOutputError(
+            "atomic-memory-input-budget", "A complete comparison input exceeds its token budget"
+        )
+        raise attach_diagnostics(
+            error,
+            ProcessingDiagnostics(
+                stage=ProcessingStage.BUSINESS_VALIDATION,
+                reason=ProcessingFailureReason.CONTEXT_OVERFLOW,
+                input_item_count=_input_item_count(value),
+                estimated_input_tokens=estimated,
+                token_estimator_id=pipeline.estimator.profile.estimator_id,
+                effective_budget=self.config.input_tokens_limit,
+                failure_location=key,
+            ),
+        )
 
     @staticmethod
     def _require_window(window, after, through):
@@ -784,3 +805,10 @@ def _window_operation_id(prepared) -> str:
 
 def _conflict(detail: str) -> NoReturn:
     raise AtomicMemoryConflictError(detail)
+
+
+def _input_item_count(value: object) -> int | None:
+    evidence = getattr(value, "evidence", None)
+    if isinstance(evidence, (tuple, list)):
+        return len(evidence)
+    return None
