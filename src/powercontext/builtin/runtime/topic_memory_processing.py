@@ -82,6 +82,7 @@ from powercontext.builtin.artifacts.topic_memory.relatedness import (
     topic_memory_vector_centroid,
 )
 from powercontext.builtin.artifacts.topic_memory.search import bounded_topic_memory_query
+from powercontext.builtin.images.models import IMAGE_ANALYSIS_TYPE, ImageAnalysisSource, image_text_evidence
 from powercontext.builtin.inference import (
     EmbeddingModel,
     EmbeddingResult,
@@ -1352,9 +1353,12 @@ async def _project_evidence(
     stored: StoredSource,
     sources: SourceRepository,
 ) -> TopicMemoryEvidence:
-    materialized = (
-        stored.value if isinstance(stored.value, SourceObservation) else await sources.read_value(stored.value)
-    )
+    if isinstance(stored.value, ImageAnalysisSource):
+        materialized = image_text_evidence(stored.value)
+    else:
+        materialized = (
+            stored.value if isinstance(stored.value, SourceObservation) else await sources.read_value(stored.value)
+        )
     content = await asyncio.to_thread(
         _canonical_source_content,
         stored.ref.source_type,
@@ -1412,6 +1416,8 @@ def _source_evidence_payload(source_type: str, materialized: object) -> dict[str
         payload = {"name": materialized.name, "description": materialized.description}
     elif isinstance(materialized, SourceObservation):
         payload = _observation_evidence_payload(materialized)
+    elif source_type == IMAGE_ANALYSIS_TYPE and isinstance(materialized, TextEvidence):
+        payload = {"content": materialized.content, "metadata": materialized.metadata}
     else:
         raise TopicMemoryGenerationError("unsupported_evidence")
     return payload
