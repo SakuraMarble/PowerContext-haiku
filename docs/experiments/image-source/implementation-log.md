@@ -13,7 +13,15 @@ description: 按阶段记录目标、实际变更、验证证据、限制和后�
 
 API／JS／Desktop／图片契约、图片投递与 Dashboard、Scope binding、system CLI 定向集合首轮为 369 passed、2 skipped、2 failed；两项失败发生在 Desktop 契约尚未生成时，生成后 `tests/test_desktop_contract.py` 为 2 passed。两个锁检查、Python／JS 生成漂移检查和 Linux 目标 ty 检查通过。Desktop UI 测试 32 passed。
 
-GitHub Desktop 三个平台均失败于 `bundled_qualification_allows_explicit_scope_browsing`：当前 OpenAPI 摘要没有对应的内置 Server 资格记录。在本机 Windows/Rust 1.95.0 定向执行原测试复现相同失败。后续使用合并提交构建独立 wheel，执行原生客户端与真实 SQLite Server 协议验收，再添加新资格记录；保留所有历史记录与原测试断言。
+GitHub Desktop 三个平台均失败于 `bundled_qualification_allows_explicit_scope_browsing`：当前 OpenAPI 摘要没有对应的内置 Server 资格记录。在本机 Windows/Rust 1.95.0 定向执行原测试复现相同失败。使用合并提交 `ec32d953be18b52ace1099ceb7107f6a89ba66c9` 构建独立 wheel，执行原生客户端与真实 SQLite Server 协议验收后添加 `sqlite-atomic-ec32d953-v1`；保留所有历史记录与原测试断言。精确来源、契约、wheel 和源码清单摘要及复现命令记录于 `desktop/VALIDATION.md`。
+
+`uv build --wheel --out-dir desktop/.artifacts/server-wheel`、`fixture_qualification.py --server-commit ec32d953be18b52ace1099ceb7107f6a89ba66c9`、`cargo build --locked --manifest-path desktop/src-tauri/Cargo.toml --example server_probe` 和 `uv run --no-sync python desktop/tests/real_server.py` 完成。Windows 11 AMD64 / Python 3.14.5 / Rust 1.95.0 下，匿名、Bearer、HTTPS 显式 CA/base path、注入 provider 强制授权四种真实 Server 模式均通过。556 个 wheel 运行时文件经 CRLF/LF 规范化后与记录提交一致；协议验收不代表图片原生 UI、安装包、macOS 或发布验收。
+
+补充验证：图片证据／解析／恢复／标准集成、Memory 协调和 MiniCPM 集合 69 passed；资格 fixture 测试 5 passed；`cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml` 全部 53 个测试通过，包含最初失败的 bundled qualification 用例。Desktop lint、32 项 UI 测试和 build、`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过，非类型 pre-commit hooks 通过。
+
+本机默认 Windows `ty check` 仍因已有 POSIX 接口及 `url2pathname` 弃用提示报告 34 项诊断；Linux 目标检查通过。没有修改检查配置或放宽类型规则。
+
+原 E2E harness 的 OceanBase 失败已读取上传产物确认：21 项数据库回归通过，正常批次与 LoCoMo 场景通过，fail-fast 场景启动时 Docker Hub 的 Python 基础镜像 HEAD 请求返回 HTTP 500，尚未执行任务。没有因此更改产品代码、失败策略或验收断言；新提交将重新触发该远端场景，本机没有声称执行 OceanBase Docker 验收。
 
 ## 2026-10-23：PR #1956 代码审查与缺陷修复
 
