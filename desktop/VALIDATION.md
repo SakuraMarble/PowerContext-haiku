@@ -22,7 +22,7 @@ cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
 
 ## Compatibility scope
 
-[compatibility.json](src-tauri/src/connections/compatibility.json) preserves the recorded Server sources, normalized OpenAPI contract digests and qualification-wheel digests for the historical profiles below. The current contract is qualified by `sqlite-atomic-d9a78567-v1` below; ordinary builds require explicitly selecting it and checking the connection before business operations become available. The `sqlite-atomic-caf2a35a-v1`, `sqlite-atomic-683e2db0-v1` and `sqlite-atomic-cab054db-v1` records qualify their corresponding Server source deployments and do not match this bundled contract. Historical records are disabled in the selector, and saved unavailable selections remain visible until explicitly replaced. CI builds have their own artifact identities and do not change product qualification.
+[compatibility.json](src-tauri/src/connections/compatibility.json) preserves the recorded Server sources, normalized OpenAPI contract digests and qualification-wheel digests for the profiles below. Only records matching the bundled contract are available for selection; ordinary builds require explicitly selecting a matching profile and checking the connection before business operations become available. Records for other contracts are disabled in the selector, and saved unavailable selections remain visible until explicitly replaced. CI builds have their own artifact identities and do not change product qualification.
 
 The real Server harness covers SQLite with anonymous loopback, static Bearer, HTTPS with explicit CA/base path, and injected-provider/enforced access. It exercises save/search/exact reads, identity changes, binding revocation, ambiguous writes without replay and Scope pagination. Installed UI checks cover repeated launches preserving the existing editor, late committed-save responses preserving a new Scope draft, explicit connection/Scope selection, clipboard copies, connection isolation, draft cancellation, byte limits and independent Server survival after Desktop exit.
 
@@ -30,9 +30,36 @@ Selecting a compatibility profile does not attest the remote binary identity. Ex
 
 ### Current Server protocol qualification
 
+#### Server 1da99747 protocol qualification
+
+`sqlite-atomic-1da99747-v1` identifies Server sources at
+`1da997476651c2850ff7141e2b7cd512d0152a90` and normalized OpenAPI digest
+`5878999ce9e239d6642e4da858074b281ed465629432c578b3584eec47cbce6c`.
+The qualification wheel is `powercontext-1.4.1.dev139+g1da997476-py3-none-any.whl`,
+SHA-256 `92c71e27f406df8663b6cac894ecef9fe8aff17454a5a0dda736b09624c305d9`.
+All 540 packaged runtime files match the recorded Server commit byte for byte; the OpenAPI
+contract, project configuration and lock also match. The sorted runtime source-manifest digest
+is `da5b32b18298795299135c585c618d8238683eb596b2121f4904f61da23c3786`
+(one `wheel/path sha256` entry per line, with a final newline).
+
+The existing real-Server harness passed against this isolated wheel and SQLite in all four modes:
+anonymous loopback, static Bearer, HTTPS with an explicit CA and base path, and an injected
+provider with enforced access. The ten recorded operations cover Scope selection and pagination,
+Atomic Memory save/search/exact revision reads, identity changes, same-identity revocation,
+committed writes with lost responses without replay, and independent Server survival after the
+client exits.
+
+Qualification ran on Linux x86_64 with Python 3.12.3 and Rust 1.95.0. The standalone Rust client
+compiled the unmodified product connection, transport, credential and error modules, plus
+`server_probe.rs`, from Desktop merge commit `5bab8fc3720087e537a1a5cd1da613fd044780b7`.
+Every client dependency version and checksum matches the product Cargo lock. The Tauri GUI shell
+was excluded. This establishes Server protocol compatibility for the recorded sources and wheel;
+it does not qualify Linux Desktop support, native macOS/Windows packaging, credential stores,
+or installed UI workflows. Historical records retain their original identities and evidence.
+
 #### Server d9a78567 protocol qualification
 
-The bundled contract is qualified by `sqlite-atomic-d9a78567-v1`. The record identifies Server
+The recorded contract is qualified by `sqlite-atomic-d9a78567-v1`. The record identifies Server
 sources at `d9a785675dedb72cd72a386b346e590f4c067ac0` and normalized OpenAPI digest
 `a6758fd35296abefb55ab86b152584a369d5f2deedfee7a3f9822e16ad1edc25`.
 The qualification wheel is `powercontext-1.4.1.dev69+ga200d6094.d20261022-py3-none-any.whl`,
@@ -139,7 +166,7 @@ matching `sqlite-atomic-caf2a35a-v1`. The observed app is identified by the exec
 this record does not identify its exact build source revision. This is historical evidence, not a
 procedure or native UI qualification for the current bundled contract.
 
-The current `sqlite-atomic-d9a78567-v1` record has non-GUI protocol evidence on Linux x86_64 only.
+The `sqlite-atomic-d9a78567-v1` record has non-GUI protocol evidence on Linux x86_64 only.
 Native macOS save/search/exact-read and clipboard acceptance against that record remains unverified.
 
 The normal release app (without `ci-fixtures`) was operated on macOS 26.5.2 ARM64 against the
