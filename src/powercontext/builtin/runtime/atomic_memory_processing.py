@@ -423,6 +423,14 @@ class AtomicMemorySourceWindowProcessor:
                 sorted(by_id[identifier].journal_position for identifier in candidate.evidence_ids)
             ),
         )
+        # Built-in extraction decides which candidates are worth keeping, with the whole window in view. With nothing to
+        # compare, built-in reconciliation could only ask that again from the candidate's own evidence, so the candidate
+        # is kept as extracted. Its unworthy noop is a second opinion only where it compares related items.
+        # Custom Prompts and injected stages may apply their own policy.
+        skip_unrelated = all(
+            prompt is not None and prompt.selection == "built_in"
+            for prompt in (extraction_prompt, current_prompt("atomic_memory.reconcile"))
+        )
         for ordinal, candidate in enumerate(candidates):
             selected = tuple(by_id[identifier] for identifier in dict.fromkeys(candidate.evidence_ids))
             key = workset.add(
@@ -440,6 +448,8 @@ class AtomicMemorySourceWindowProcessor:
             hits = await self._recall(scope_id, candidate.text, context)
             recalled = await self._load_related_items(scope_id, hits, context, workset, artifacts)
             pending = list(dict.fromkeys((*prior, *recalled)))
+            if not pending and skip_unrelated:
+                continue
             compared = False
             while pending or not compared:
                 related = workset.related(key, pending[: self.config.comparison_batch_size])

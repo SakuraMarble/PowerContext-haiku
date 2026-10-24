@@ -44,6 +44,10 @@ The scope ID selects an isolated Source journal, Memory set, and Trigger cursor 
 `ScopedAtomicMemoryApplication.create()` writes explicit memories in one all-or-nothing batch and returns one record per
 input. Source-based extraction follows a separate path: capture Sources, then call `flush()` to process the pending
 Source window with the configured extraction pipeline. `cursor()` reports the processed Source position.
+With the built-in extraction and reconciliation Prompts, a candidate that has no related memory or earlier candidate in
+its window is kept as extracted without a reconciliation request; a custom Prompt or an injected pipeline reconciles
+every candidate. Extraction owns the decision to keep a fact. The built-in reconciler's `noop` without a target drops a
+candidate only while comparing it with related items, so such a candidate never reaches that second check.
 
 The built-in extraction and reconciliation instructions preserve each fact's supporting Source language. Chinese
 facts stay in Chinese and English facts stay in English, including when they share a processing window. Mixed-language
