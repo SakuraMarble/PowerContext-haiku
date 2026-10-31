@@ -30,6 +30,7 @@ from pypdf import PdfReader
 from powercontext._lexical import rank_texts, terms
 from powercontext.builtin.artifacts.memory.models import MemoryCitation, MemoryHit
 from powercontext.builtin.runtime.models import GetMemoryEntryRequest, SearchMemoryRequest
+from powercontext.sources.definitions import SourceProjection
 from powercontext.sources.models import Source, SourceMaterialization
 from powercontext.sources.projections import TEXT_EVIDENCE_PROJECTION_KEY, TextEvidence
 
@@ -77,8 +78,8 @@ def parse_pdf_document(value: PDFDocumentInput) -> tuple[PDFPageInput, ...]:
 class _PDFTextProjection:
     name = TEXT_EVIDENCE_PROJECTION_KEY.name
     version = TEXT_EVIDENCE_PROJECTION_KEY.version
-    source_class = PDFPageSource
-    output_class = TextEvidence
+    source_class: type[PDFPageSource] = PDFPageSource
+    output_class: type[BaseModel] = TextEvidence
 
     def project(self, source: PDFPageSource, /) -> TextEvidence:
         page = source.page
@@ -97,9 +98,9 @@ class _PDFTextProjection:
 class _PDFPageDefinition:
     name = "pdf-page"
     version = "1"
-    input_class = PDFPageInput
-    source_class = PDFPageSource
-    projections = (_PDFTextProjection(),)
+    input_class: type[PDFPageInput] = PDFPageInput
+    source_class: type[PDFPageSource] = PDFPageSource
+    projections: tuple[SourceProjection[PDFPageSource], ...] = (_PDFTextProjection(),)
 
     async def resolve(self, value: PDFPageInput, /) -> PDFPageSource:
         if (
@@ -138,7 +139,9 @@ async def search_pdf_pages(
     ):
         if re.search(trigger, lower):
             expansions.append(expansion)
-    query = " ".join(terms(question))
+    # The Memory FTS analyzer indexes complete words. Stems are useful for the
+    # local reranker, but sending them to that index silently loses candidates.
+    query = " ".join(terms(question, stem=False))
     queries = [query or question, *expansions]
     hits: dict[tuple[str, str, str], MemoryHit] = {}
     for query_text in queries:
