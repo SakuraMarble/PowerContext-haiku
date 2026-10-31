@@ -36,9 +36,9 @@ from pypdf.generic import (
     TextStringObject,
 )
 
-from powercontext._lexical import rank_texts, terms
-from powercontext.builtin.artifacts.memory.models import MemoryCitation, MemoryHit
-from powercontext.builtin.runtime.models import GetMemoryEntryRequest, SearchMemoryRequest
+from powercontext._lexical import rank_texts
+from powercontext.builtin.artifacts.memory.models import MemoryCitation
+from powercontext.builtin.runtime.models import SearchMemoryRequest
 from powercontext.sources.definitions import SourceProjection
 from powercontext.sources.models import Source, SourceMaterialization
 from powercontext.sources.projections import TEXT_EVIDENCE_PROJECTION_KEY, TextEvidence
@@ -248,56 +248,108 @@ class _PDFPageDefinition:
 PDF_PAGE_SOURCE_DEFINITION = _PDFPageDefinition()
 
 
+def _financial_views(question: str) -> tuple[str, ...]:
+    """Separate accounting concepts so a multi-statement question keeps each view."""
+    views = [re.sub(r"\bfy\s*(\d{4})\b", r"\1", question, flags=re.IGNORECASE)]
+    for trigger, view in (
+        (r"legal|litigat|lawsuit|battles", "legal proceedings litigation contingencies lawsuits"),
+        (
+            r"geograph|regions?|countries|operates",
+            "business divisions reportable segments geographic markets operations",
+        ),
+        (r"capex|capital expenditure", "capital expenditures spending purchases additions property plant equipment"),
+        (
+            r"income statement|p\s*&\s*l|ebitda|operating income|profit margin",
+            "consolidated statements income earnings operations net sales revenue operating profit",
+        ),
+        (
+            r"cash.?flows?|ebitda|depreciation|amortization|d&a",
+            "consolidated statements cash flows operating activities depreciation amortization",
+        ),
+        (
+            r"balance sheet|financial position|receivabl|payabl|working capital",
+            "consolidated balance sheets financial position current assets liabilities receivables payables",
+        ),
+        (r"restructur", "restructuring charges costs plan expenses"),
+        (r"dividend", "dividends declared paid cash distributions shareholders"),
+        (r"repurchas|buyback", "share stock repurchases treasury shares cash payments"),
+    ):
+        if re.search(trigger, question, re.IGNORECASE):
+            views.append(view)
+    return tuple(dict.fromkeys(views))
+
+
+def _mentions_document_company(question: str, document_id: str) -> bool:
+    """Recognize an explicitly named issuer from the stored document identifier.
+
+    Do not route on a fiscal year: a filing can contain earlier-year evidence.
+    Unknown identifiers impose no company restriction.
+    """
+    prefix = re.split(r"(?:19|20)\d{2}", document_id, maxsplit=1)[0]
+    issuer = "".join(re.findall(r"[a-z0-9]+", prefix.lower()))
+    if issuer in {"", "report", "annualreport", "filing", "document", "control"}:
+        return False
+    if len(issuer) < 4:
+        return re.search(r"\b" + re.escape(issuer) + r"\b", question.lower()) is not None
+    return issuer in "".join(re.findall(r"[a-z0-9]+", question.lower()))
+
+
 async def search_pdf_pages(
     memory: ScopedMemoryApplication, question: str, limit: int = 10
 ) -> tuple[MemoryCitation, ...]:
-    """Retrieve real Memory hits, expand financial terms, and rerank without a model."""
+    """Fuse public Memory search with scoped, active-page lexical retrieval.
+
+    One current-head snapshot provides corpus statistics and exact citations.
+    This avoids index admission/truncation dropping a requested statement. No
+    source file, database internals, external model, or precomputed corpus is
+    read; both indexed hits and snapshot bodies come from public Memory APIs.
+    """
     if type(limit) is not int or limit < 1:
         raise ValueError("page search limit must be a positive integer")
-    expansions = []
-    lower = question.lower()
-    for trigger, expansion in (
-        (r"legal|litigat|lawsuit|battles", "legal proceedings litigation contingencies lawsuits"),
-        (r"geograph|regions?|countries|operates", "geographic segments countries international operations"),
-        (r"capex|capital expenditure", "capital spending payments property plant equipment cash flows"),
-        (r"ebitda|depreciation|amortization|d&a", "operating income depreciation amortization consolidated cash flows"),
-        (r"income statement|p&l", "consolidated statements income earnings revenue"),
-    ):
-        if re.search(trigger, lower):
-            expansions.append(expansion)
-    normalized_question = re.sub(r"\bfy\s*(\d{4})\b", r"\1", question, flags=re.IGNORECASE)
-    # The Memory analyzer preserves identifiers, and its admission gate asks
-    # long queries to share several words. Finance questions often describe
-    # multiple statements, so retrieve with short keyword views, then rank the
-    # union against the complete question. Every candidate remains a real hit.
-    queries = []
-    for view in (normalized_question, *expansions):
-        words = tuple(dict.fromkeys(terms(view, stem=False, preserve_alphanumeric=True)))
-        queries.extend(" ".join(words[start : start + 2]) for start in range(0, len(words), 2))
-    queries = list(dict.fromkeys(queries)) or [question]
-    hits: dict[tuple[str, str, str], MemoryHit] = {}
-    for query_text in queries:
-        result = await memory.search(SearchMemoryRequest(query=query_text, limit=max(128, limit * 16), mode="fts"))
-        for hit in result.hits:
-            hits.setdefault((hit.memory_ref.artifact_id, hit.entry_id, hit.entry_version_id), hit)
-    candidates = list(hits.values())
-    scores = rank_texts(
-        normalized_question + " " + " ".join(expansions), [hit.text for hit in candidates], preserve_alphanumeric=True
+    views = _financial_views(question)
+    indexed = await memory.search(SearchMemoryRequest(query=views[0], limit=max(128, limit * 8), mode="fts"))
+    snapshot = await memory.list()
+    records = [
+        record
+        for record in snapshot.entries
+        if any(source.source_type == "pdf-page" for source in record.entry.sources)
+    ]
+    named = [record for record in records if _mentions_document_company(question, record.entry.text.partition("\n")[0])]
+    if named:
+        records = named
+    bodies = [record.entry.text.partition("\n")[2] for record in records]
+    orders = []
+    fused = [0.0] * len(records)
+    for view_number, view in enumerate(views):
+        scores = rank_texts(view, bodies, preserve_alphanumeric=True)
+        order = sorted((i for i, score in enumerate(scores) if score > 0), key=lambda i: (-scores[i], i))
+        orders.append(order)
+        for rank, index in enumerate(order, start=1):
+            fused[index] += (2.0 if view_number == 0 else 1.0) / (60 + rank)
+    positions = {(record.entry.entry_id, record.entry.entry_version_id): i for i, record in enumerate(records)}
+    for rank, hit in enumerate(indexed.hits, start=1):
+        index = positions.get((hit.entry_id, hit.entry_version_id))
+        if index is not None:
+            fused[index] += 0.5 / (60 + rank)
+    # Reserve two leading candidates from each requested concept before filling
+    # by reciprocal rank. This keeps an income statement beside cash-flow
+    # evidence even when the latter repeats many more words from the question.
+    reserved = list(
+        dict.fromkeys(index for depth in range(2) for order in orders for index in order[depth : depth + 1])
     )
-    order = sorted(range(len(candidates)), key=lambda index: (-scores[index], index))
+    overall = sorted((i for i, score in enumerate(fused) if score > 0), key=lambda i: (-fused[i], i))
+    ordered = list(dict.fromkeys([*reserved, *overall]))
     selected, pages = [], set()
-    for index in order:
-        hit = candidates[index]
-        citation = MemoryCitation(
-            memory_ref=hit.memory_ref, entry_id=hit.entry_id, entry_version_id=hit.entry_version_id
-        )
-        entry = (await memory.get(GetMemoryEntryRequest(citation=citation))).entry
+    for index in ordered:
+        record = records[index]
         identities = tuple(
-            (source.source_type, source.source_id) for source in entry.sources if source.source_type == "pdf-page"
+            (source.source_type, source.source_id)
+            for source in record.entry.sources
+            if source.source_type == "pdf-page"
         )
-        if not identities or any(identity in pages for identity in identities):
+        if any(identity in pages for identity in identities):
             continue
-        selected.append(citation)
+        selected.append(record.citation)
         pages.update(identities)
         if len(selected) == limit:
             break
