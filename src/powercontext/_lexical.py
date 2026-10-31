@@ -97,34 +97,35 @@ _STOP = frozenset([
 ])
 
 
-def terms(text: str, *, stem: bool = True) -> tuple[str, ...]:
-    result = []
-    for token in re.findall(r"[a-z]+|\d+|[\u4e00-\u9fff]", text.lower()):
-        if token in _STOP:
-            continue
-        if stem and len(token) > 5:
-            if token.endswith("ies"):
-                token = token[:-3] + "y"
-            elif token.endswith("ing"):
-                token = token[:-3]
-            elif token.endswith("ed"):
-                token = token[:-2]
-            elif token.endswith("s") and not token.endswith("ss"):
-                token = token[:-1]
-            if token.endswith("ion"):
-                token = token[:-3]
-            if token.endswith("e"):
-                token = token[:-1]
-        result.append(token)
+def _stem(token: str) -> str:
+    if len(token) > 5:
+        if token.endswith("ies"):
+            token = token[:-3] + "y"
+        elif token.endswith("ing"):
+            token = token[:-3]
+        elif token.endswith("ed"):
+            token = token[:-2]
+        elif token.endswith("s") and not token.endswith("ss"):
+            token = token[:-1]
+        if token.endswith("ion"):
+            token = token[:-3]
+        if token.endswith("e"):
+            token = token[:-1]
+    return token
+
+
+def terms(text: str, *, stem: bool = True, preserve_alphanumeric: bool = False) -> tuple[str, ...]:
+    pattern = r"[a-z0-9]+|[\u4e00-\u9fff]" if preserve_alphanumeric else r"[a-z]+|\d+|[\u4e00-\u9fff]"
+    result = [_stem(token) if stem else token for token in re.findall(pattern, text.lower()) if token not in _STOP]
     return tuple(result)
 
 
-def rank_texts(query: str, documents: list[str]) -> list[float]:
+def rank_texts(query: str, documents: list[str], *, preserve_alphanumeric: bool = False) -> list[float]:
     """BM25 scores with deterministic, local corpus statistics and light stemming."""
     if not documents:
         return []
-    query_terms = Counter(terms(query))
-    counts = [Counter(terms(text)) for text in documents]
+    query_terms = Counter(terms(query, preserve_alphanumeric=preserve_alphanumeric))
+    counts = [Counter(terms(text, preserve_alphanumeric=preserve_alphanumeric)) for text in documents]
     document_frequency = Counter(term for count in counts for term in count)
     average_length = sum(sum(count.values()) for count in counts) / len(counts) or 1
     scores = []
