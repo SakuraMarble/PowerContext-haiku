@@ -97,12 +97,12 @@ _STOP = frozenset([
 ])
 
 
-def terms(text: str) -> tuple[str, ...]:
+def terms(text: str, *, stem: bool = True) -> tuple[str, ...]:
     result = []
     for token in re.findall(r"[a-z]+|\d+|[\u4e00-\u9fff]", text.lower()):
         if token in _STOP:
             continue
-        if len(token) > 5:
+        if stem and len(token) > 5:
             if token.endswith("ies"):
                 token = token[:-3] + "y"
             elif token.endswith("ing"):
