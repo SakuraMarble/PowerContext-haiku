@@ -169,3 +169,57 @@ def test_multi_statement_question_keeps_income_evidence_among_cash_flow_pages(tm
             assert references.intersection(observation.name for observation in observations[:-1])
 
     asyncio.run(run())
+
+
+def test_named_company_question_does_not_return_another_company_statements(tmp_path):
+    async def run():
+        config = BuiltinConfig(database=SQLiteConfig(url=f"sqlite+aiosqlite:///{tmp_path / 'companies.db'}"))
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        observations, evidence = [], set()
+        for number in range(1, 36):
+            company = "ALPHA" if number <= 33 else "BETA"
+            if number == 1:
+                text = "Consolidated Statements of Income. Net sales 100. Operating profit 20."
+            elif number == 2:
+                text = "Consolidated Statements of Cash Flows. Depreciation 3. Amortization 2."
+            elif company == "ALPHA":
+                text = f"Product information section {number}. Products, customers and distribution."
+            else:
+                text = (
+                    "EBITDA based on operating income plus depreciation and amortization from the "
+                    "income statement and cash flow statement. Unadjusted earnings and capital expenditures."
+                )
+            source = await registry.resolve(
+                PDFPageInput(document_id=f"{company}_2023_10K", document_sha256="c" * 64, page_number=number, text=text)
+            )
+            observations.append(project_source_for_transport(registry, source))
+            if number in {1, 2}:
+                evidence.add(source.name)
+        async with open_builtin_runtime(config, candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Companies", summary="PDF", idempotency_key="companies")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            for observation in observations:
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            for _ in range(len(observations) + 1):
+                if not (await memory.flush()).processed:
+                    break
+            citations = await search_pdf_pages(
+                memory,
+                "What is Alpha's FY2023 EBITDA based on operating income plus depreciation and amortization "
+                "from its income statement and cash flow statement?",
+                limit=2,
+            )
+            actual = {
+                ref.source_id
+                for citation in citations
+                for ref in (await memory.get(GetMemoryEntryRequest(citation=citation))).entry.sources
+            }
+            assert actual == evidence
+
+    asyncio.run(run())
